@@ -1,0 +1,324 @@
+###########################
+#   IMPORTING LIBRARIES   #
+###########################
+
+import wrf as wrf
+import numpy as np
+import netCDF4
+from netCDF4 import Dataset
+import os
+import datetime
+from osgeo import gdal
+from mpl_toolkits.basemap import Basemap, maskoceans
+from matplotlib.path import Path
+import matplotlib as matlb
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+from matplotlib.colors import from_levels_and_colors
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib
+
+
+#########################################
+#   GETTING THE TIMESERIES OF A POINT   #
+#########################################
+
+def timeseries(lon,lat,lon_2d,lat_2d,ts_tot,variable,fnl_timeseries,hour, day, month, year,ts_point_names,p,landuse, rh_hour, height,general_label, wv_hour, wu_hour, td_hour):
+  print "Getting timeseries for " + str(lon[p]) + "," + str(lat[p]) + "," + str(ts_point_names[p])
+  dims = lon_2d.shape
+  x_dim = dims[0]
+  y_dim = dims[1]
+  search_resolution = 0.02
+  
+  lon_chk = 10000000
+  lat_chk = 10000000
+  
+  print "Alternative coordinates:"
+  
+  for x in range (0,x_dim):  
+    for y in range (0,y_dim):
+      if lon[p]-search_resolution <= lon_2d[x,y] <= lon[p]+search_resolution and lat[p]-search_resolution <= lat_2d[x,y] <= lat[p]+search_resolution:
+        if abs( (lat_2d[x,y]-lat[p]) ) < lat_chk and abs( (lon_2d[x,y]-lon[p]) ) < lon_chk :
+          lon_ts_wrf = lon_2d[x,y]
+          lat_ts_wrf = lat_2d[x,y]
+          wrf_x = x
+          wrf_y = y
+          lon_chk = abs( (lon_2d[x,y]-lon[p]) )
+          lat_chk = abs( (lat_2d[x,y]-lat[p]) )
+          lat_chk = lon_2d[x,y]+lat_2d[x,y]
+          print lat_ts_wrf,lon_ts_wrf
+    
+  print "The selected coordinates are: " + str(lat_ts_wrf) + " , " + str(lon_ts_wrf)
+  
+  
+  fnl_hour = [0 for x in range(len(variable))]
+  fnl_day = [0 for x in range(len(variable))]
+  fnl_month = [0 for x in range(len(variable))]
+  fnl_year = [0 for x in range(len(variable))]
+  fnl_rh = [0 for x in range(len(variable))]
+  fnl_wv = [0 for x in range(len(variable))]
+  fnl_wu = [0 for x in range(len(variable))]
+  fnl_td = [0 for x in range(len(variable))]
+  
+  #Finding the landuse class
+  lu = landuse
+  hgt = height
+  print "LandUse for " + ts_point_names[p] + " is " + str(lu[wrf_x,wrf_y])
+  print "Altitude for " + ts_point_names[p] + " is " + str(hgt[wrf_x,wrf_y])
+
+  for x in range (0,ts_tot):
+    temporary_table = variable[x]
+    rh = rh_hour[x]
+    wv = wv_hour[x]
+    wu = wu_hour[x]
+    td = td_hour[x]
+    fnl_timeseries[x] = temporary_table[wrf_x,wrf_y]
+    fnl_rh[x] = rh[wrf_x,wrf_y]
+    fnl_wv[x] = wv[wrf_x,wrf_y]
+    fnl_wu[x] = wu[wrf_x,wrf_y]
+    fnl_td[x] = td[wrf_x,wrf_y]
+    fnl_hour[x] = hour[x]
+    fnl_day[x] = day[x]
+    fnl_month[x] = month[x]
+    fnl_year[x] = year[x]
+  
+
+        
+  with open(ts_point_names[p] + "_" + general_label + '.txt', 'w') as f:
+    f.write( "Region:" + ts_point_names[p] + '\n')
+    f.write( "Altitude:" + str(hgt[wrf_x,wrf_y]) + '\n' )
+    f.write( "Corine LandUse:" + str(lu[wrf_x,wrf_y]) + '\n' )
+    f.write( "Hour " + "Day " + "Month " + "Year " + "Temperature " + "RH " + "Td " + "WU " + "WV " + '\n')
+    for item1, item2, item3, item4, item5, item6, item7, item8, item9 in zip(hour, day, month, year, fnl_timeseries, fnl_rh,fnl_td,fnl_wu,fnl_wv):
+        print >> f, item1, item2, item3, item4, item5, item6, item7, item8, item9
+        
+
+#########################################
+#           OPTIONS TO CHANGE           #
+#########################################
+
+data_dirs = ["/mnt/lap_c/common/MODELS/LIFE-ASTI_CLIMATE_RUNS/Future_runs/2096-2100/"]
+save_dir = "/mnt/lap_c/home/skeppas/WRF_FILES/scripts/Post_scripts/future_analysis/"
+data_labels = ["2096"]
+spinup_time = 4 #in time-steps
+domain = 'd03'
+wrf_timestep = 3 #the time-step of the data in hours
+
+#Setting the period of getting and plotting data
+#Start time (hour, day, month and year)
+SH = 12
+SD = 1
+SM = 1
+SY = 2096
+
+#Endtime (hour, day, month and year)
+EH = 12
+ED = 30
+EM = 12
+EY = 2100
+
+#Names of timeseries points
+ts_point_names = ["Central","West","East","Western","Eastern"]
+
+#Urban/rural points
+UR_lat = [40.618, 40.659, 40.603, 40.652, 40.483]
+UR_lon = [22.956, 22.907, 22.977, 22.725, 22.852]
+
+
+
+##########################################
+#   LISTING THE FILES IN THE DIRECTORY   #
+##########################################
+
+number_of_datasets = len(data_dirs)
+
+for n in range (0,number_of_datasets):
+  
+  files = os.listdir(data_dirs[n])
+  files.sort()
+  files = files[0:]
+
+  files_counter = 0
+  files_of_dom = 0
+  
+  #Get the number of files of the domain specified in line 106
+  
+  ###############################
+  #      GETTING TIME INFO      #
+  ###############################
+  print "Getting time info for " + data_labels[n] + " data."
+  
+  #Looping over the files of the domain
+  for file in files:
+    filename,extname = os.path.splitext(file)
+    
+    if filename[7:10] == domain:
+      
+      ncdin=netCDF4.Dataset(data_dirs[n] + file,'r')
+      timesteps_of_file=len(ncdin.variables['Times'][spinup_time:,:])
+      
+      # Retrieve time
+      wrftm=ncdin.variables['Times'][spinup_time:,:]
+      filetimestamps=np.array([datetime.datetime.strptime(d1,"%Y-%m-%d_%H:%M:%S") for d1 in [''.join(row) for row in wrftm ] ])
+      coord_file = file
+      
+      #Looping over the timesteps of a file
+      for y in range (0, len(filetimestamps)):
+        timestamp = str(filetimestamps[y])
+        FY = timestamp[0:4]
+        FM = timestamp[5:7]
+        FD = timestamp[8:10]
+        FH = timestamp[11:13]
+        
+        if int(FY) == SY and int(FM) == SM and int(FD) == SD and int(FH) == SH:
+          
+          start_in_file = y
+          num_of_start_file = files_counter
+          print "The fist file is: " + file
+          
+        if int(FY) == EY and int(FM) == EM and int(FD) == ED and int(FH) == EH:
+          end_in_file = y
+          num_of_end_file = files_counter
+          print "The last file is: " + file
+          
+      files_of_dom = files_of_dom + 1
+         
+    files_counter = files_counter + 1  
+
+  
+  #####################################
+  #  GETTING INFO FROM STATIC FIELDS  #
+  #####################################
+  ncdin=netCDF4.Dataset(data_dirs[n] + coord_file,'r')
+  lat = wrf.getvar(ncdin, "lat", timeidx=wrf.ALL_TIMES,meta=False)
+  lon = wrf.getvar(ncdin, "lon", timeidx=wrf.ALL_TIMES,meta=False)
+  lat = lat[1]
+  lon = lon[1]
+  
+  landuse = wrf.getvar(ncdin, "LU_INDEX", timeidx=wrf.ALL_TIMES,meta=False)
+  landuse = landuse[1]
+  
+  height = wrf.getvar(ncdin, "HGT", timeidx=wrf.ALL_TIMES,meta=False)
+  height = height[1]
+  
+  ncdin.close()
+  print "Coordinates have been obtained."
+  
+  
+  ######################################################
+  #  CALCULATING THE SIZE & CREATING OF THE NEW LISTS  #
+  ######################################################
+  E_days_of_month = 0
+  S_days_of_month = 0
+  if EM-1 == 0:
+    E_days_of_month = 0
+  if EM-1 == 1 or EM-1 == 3 or EM-1 == 5 or EM-1 == 7 or EM-1 == 8 or EM-1 == 10:
+    E_days_of_month = 31
+  if EM-1 == 4 or EM-1 == 6 or EM-1 == 9 or EM-1 == 11:
+    E_days_of_month = 30
+  if EM-1 == 2:
+    E_days_of_month = 28
+    
+  if SM-1 == 0:
+    S_days_of_month = 0 
+  if SM-1 == 1 or SM-1 == 3 or SM-1 == 5 or SM-1 == 7 or SM-1 == 8 or SM-1 == 10:
+    S_days_of_month = 31
+  if SM-1 == 4 or SM-1 == 6 or SM-1 == 9 or SM-1 == 11:
+    S_days_of_month = 30
+  if SM-1 == 2:
+    S_days_of_month = 28
+    
+    
+  mat_size = ((EY*365*24 + EM*E_days_of_month*24 + (ED-1)*24 + EH) - (SY*365*24 + SM*S_days_of_month*24 + (SD-1)*24 + SH) ) / wrf_timestep +1
+
+  prec_hour = [0 for x in range(mat_size)]
+  temp_hour = [0 for x in range(mat_size)]
+  rh_hour = [0 for x in range(mat_size)]
+  wv_hour = [0 for x in range(mat_size)]
+  wu_hour = [0 for x in range(mat_size)]
+  td_hour = [0 for x in range(mat_size)]
+  hour = [0 for x in range(mat_size)]
+  day = [0 for x in range(mat_size)]
+  month = [0 for x in range(mat_size)]
+  year = [0 for x in range(mat_size)]
+  
+  
+  ######################
+  #  GETTING THE DATA  #
+  ######################  
+  ts = 0
+  print "Data wil be collected from " + str(num_of_end_file - num_of_start_file + 1) + " files"
+
+  for x in range (num_of_start_file, num_of_end_file+1):
+
+    print "Getting data from " + files[x]
+    
+    ncdin=netCDF4.Dataset(data_dirs[n] + files[x],'r')
+    wrftm=ncdin.variables['Times'][:,:]
+    filetimestamps=np.array([datetime.datetime.strptime(d1,"%Y-%m-%d_%H:%M:%S") for d1 in [''.join(row) for row in wrftm ] ])
+    temp = wrf.getvar(ncdin, "T2", timeidx=wrf.ALL_TIMES,meta=False)
+    rh = wrf.getvar(ncdin, "rh2", timeidx=wrf.ALL_TIMES,meta=False)
+    td = wrf.getvar(ncdin, "td2", timeidx=wrf.ALL_TIMES,meta=False)
+    wind_u = wrf.getvar(ncdin, "U10", timeidx=wrf.ALL_TIMES,meta=False)
+    wind_v = wrf.getvar(ncdin, "V10", timeidx=wrf.ALL_TIMES,meta=False)
+    
+    #In case of a single/the first file
+    if x == num_of_start_file:
+      if num_of_end_file - num_of_start_file == 0:
+        timesteps_of_file = end_in_file
+
+      for y in range(start_in_file+spinup_time,timesteps_of_file+spinup_time-1):
+        
+        temp_hour[ts] = temp[y]
+        rh_hour[ts] = rh[y]
+        wv_hour[ts] = wind_v[y]
+        wu_hour[ts] = wind_u[y]
+        td_hour[ts] = td[y]
+        timestamp = str(filetimestamps[y])
+        year[ts] = timestamp[0:4]
+        month[ts] = timestamp[5:7]
+        day[ts] = timestamp[8:10]
+        hour[ts] = timestamp[11:13]
+
+        ts=ts+1
+
+    #Getting data from the rest of the files except for the last
+    if x>num_of_start_file and x<num_of_end_file:
+      for y in range(spinup_time,timesteps_of_file+spinup_time-1):
+      
+        temp_hour[ts] = temp[y]
+        rh_hour[ts] = rh[y]
+        wv_hour[ts] = wind_v[y]
+        wu_hour[ts] = wind_u[y]
+        td_hour[ts] = td[y]
+        timestamp = str(filetimestamps[y])
+        year[ts] = timestamp[0:4]
+        month[ts] = timestamp[5:7]
+        day[ts] = timestamp[8:10]
+        hour[ts] = timestamp[11:13]
+        ts=ts+1
+      
+    #Getting data from the last file in case of multiple files
+    if x==num_of_end_file and num_of_end_file - num_of_start_file != 0:
+      for y in range(spinup_time,spinup_time+end_in_file+1):
+
+        temp_hour[ts] = temp[y]
+        rh_hour[ts] = rh[y]
+        wv_hour[ts] = wind_v[y]
+        wu_hour[ts] = wind_u[y]
+        td_hour[ts] = td[y]
+        timestamp = str(filetimestamps[y])
+        year[ts] = timestamp[0:4]
+        month[ts] = timestamp[5:7]
+        day[ts] = timestamp[8:10]
+        hour[ts] = timestamp[11:13]
+        ts=ts+1
+    
+    
+  print str(ts) + " timesteps have been taken into account."
+
+  ts_length = len(hour)
+  fnl_timeseries = [0 for x in range(ts_length)]
+  
+  for p in range (0,len(ts_point_names)):
+    timeseries(UR_lon,UR_lat,lon,lat,ts,temp_hour,fnl_timeseries,hour, day, month, year, ts_point_names,p,landuse, rh_hour, height,data_labels[n], wv_hour, wu_hour, td_hour)
